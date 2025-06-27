@@ -1,0 +1,13 @@
+Okay, Claude, I'm going to pause this coding session now. Please update the relevant files including TODO.md, CLAUDE.md, and Handoff_Summary.md with the relevant information to ensure a clean handoff to the next chat session. The objective of your updates must be to ensure the next Claude Code session is able to pick up exactly where we have left off and it must include, at minimum, the following:
+
+Our overall goal for this session: What were we trying to accomplish?
+
+Key decisions made or approaches we discussed/attempted: For example, "Decided to refactor X function using Y pattern."
+
+Specific code changes or edits we made: Briefly describe what changed and why, without pasting large code blocks.
+
+Current state of any in-progress tasks or unfinished code: Clearly outline what's partially done or awaiting completion or testing.
+
+Next steps or remaining tasks: What should be the primary focus when we resume?  This may include the current troubleshooting step for a problem and/or the most recent update to the code.
+
+Provide me with the full text of a prompt I will pass to the next Claude Code session that will provide it with 100% of the information necessary to ensure a seamless handoff.  Take your time and double check your work to ensure a seamless handoff. Replace the current text of NEXT_SESSION_HANDOFF_PROMPT.md with the text of the new handoff prompt you are providing.
