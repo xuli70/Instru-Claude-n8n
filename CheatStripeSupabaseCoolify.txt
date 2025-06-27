@@ -1,0 +1,1035 @@
+# 🚀 CHULETA MAESTRA: Stripe + Supabase + Coolify en VPS
+
+Guía completa para crear aplicaciones web con pagos (Stripe) y base de datos (Supabase) desplegadas en tu VPS con Coolify.
+
+## 📋 Arquitectura Completa del Sistema
+
+```
+┌─────────────────┐     HTTPS      ┌──────────────────┐
+│   Tu Dominio    │ ──────────────> │   Coolify VPS    │
+│ app.ejemplo.com │                 │   (Hostinger)    │
+└─────────────────┘                 └────────┬─────────┘
+                                             │
+                                    ┌────────┴────────┐
+                                    │                 │
+                              API Calls         API Calls
+                                    │                 │
+                                    ▼                 ▼
+                          ┌──────────────┐  ┌──────────────┐
+                          │   Supabase   │  │    Stripe    │
+                          │ (Base Datos) │  │   (Pagos)    │
+                          └──────────────┘  └──────────────┘
+```
+
+## 🛠️ Stack Tecnológico
+
+- **Frontend**: HTML, CSS, JavaScript vanilla
+- **Base de Datos**: Supabase (PostgreSQL)
+- **Pagos**: Stripe Checkout
+- **Deployment**: Coolify + Docker
+- **Servidor Web**: Caddy
+- **VPS**: Hostinger
+- **Seguridad**: Variables de entorno + RLS
+
+## 📁 Estructura de Proyecto Completa
+
+```
+mi-app-stripe-supabase/
+├── index.html          # UI principal
+├── styles.css          # Estilos
+├── config.js           # Configuración central
+├── supabase.js         # Funciones Supabase
+├── stripe.js           # Funciones Stripe
+├── products.js         # Catálogo productos
+├── app.js              # Lógica principal
+├── entrypoint.sh       # Script variables
+├── Dockerfile          # Config Docker
+├── .env.example        # Ejemplo variables
+├── .gitignore          # Archivos ignorados
+├── backend/            # Backend Node.js (opcional)
+│   ├── server.js       # Servidor Express
+│   ├── package.json    # Dependencias
+│   └── Dockerfile      # Docker backend
+└── README.md           # Documentación
+```
+
+## 🐳 Dockerfile Universal para Coolify
+
+```dockerfile
+# Dockerfile para app con Stripe + Supabase
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Instalar Caddy
+RUN apk add --no-cache caddy
+
+# Copiar archivos frontend
+COPY *.html ./
+COPY *.css ./
+COPY *.js ./
+COPY entrypoint.sh ./
+
+# Hacer ejecutable el script
+RUN chmod +x /app/entrypoint.sh
+
+# Configurar Caddy con puerto 8080
+RUN echo -e ":${PORT:-8080} {\n\
+    root * /app\n\
+    file_server\n\
+    try_files {path} /index.html\n\
+    \n\
+    # Headers de seguridad\n\
+    header {\n\
+        X-Content-Type-Options nosniff\n\
+        X-Frame-Options DENY\n\
+        X-XSS-Protection \"1; mode=block\"\n\
+        Referrer-Policy strict-origin-when-cross-origin\n\
+        Content-Security-Policy \"default-src 'self' https:; script-src 'self' 'unsafe-inline' https://js.stripe.com; style-src 'self' 'unsafe-inline'; frame-src https://js.stripe.com https://hooks.stripe.com;\"\n\
+    }\n\
+    \n\
+    # CORS para APIs\n\
+    header Access-Control-Allow-Origin *\n\
+    header Access-Control-Allow-Methods \"GET, POST, PUT, DELETE, OPTIONS\"\n\
+    header Access-Control-Allow-Headers \"Content-Type, Authorization, X-Requested-With\"\n\
+    \n\
+    # Proxy para backend (si lo tienes)\n\
+    @api {\n\
+        path /api/*\n\
+    }\n\
+    reverse_proxy @api localhost:3000\n\
+}" > /app/Caddyfile
+
+EXPOSE 8080
+
+CMD ["/app/entrypoint.sh"]
+```
+
+## 🔐 Script de Variables (entrypoint.sh)
+
+```bash
+#!/bin/sh
+# Script universal para inyectar variables de Stripe y Supabase
+
+echo "🚀 Iniciando aplicación..."
+
+# Crear archivo env.js con todas las variables
+cat > /app/env.js << EOF
+// Variables de entorno inyectadas por Coolify
+window.ENV = {
+    // === SUPABASE ===
+    SUPABASE_URL: "${SUPABASE_URL}",
+    SUPABASE_ANON_KEY: "${SUPABASE_ANON_KEY}",
+    
+    // === STRIPE ===
+    STRIPE_PUBLIC_KEY: "${STRIPE_PUBLIC_KEY}",
+    STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET}",
+    
+    // === BACKEND ===
+    API_URL: "${API_URL:-http://localhost:3000}",
+    
+    // === CONFIGURACIÓN ===
+    APP_MODE: "${APP_MODE:-development}",
+    ENABLE_DEBUG: "${ENABLE_DEBUG:-false}"
+};
+
+// Validación inicial
+console.log('✅ Variables de entorno cargadas');
+console.log('   - Supabase:', window.ENV.SUPABASE_URL ? '✅' : '❌');
+console.log('   - Stripe:', window.ENV.STRIPE_PUBLIC_KEY ? '✅' : '❌');
+console.log('   - Modo:', window.ENV.APP_MODE);
+EOF
+
+echo "✅ Variables configuradas"
+
+# Verificar variables críticas
+if [ -z "$SUPABASE_URL" ]; then
+    echo "⚠️  ADVERTENCIA: SUPABASE_URL no configurada"
+fi
+
+if [ -z "$STRIPE_PUBLIC_KEY" ]; then
+    echo "⚠️  ADVERTENCIA: STRIPE_PUBLIC_KEY no configurada"
+fi
+
+# Iniciar Caddy
+echo "🌐 Iniciando servidor en puerto ${PORT:-8080}..."
+exec caddy run --config /app/Caddyfile --adapter caddyfile
+```
+
+## 🔑 Configuración Central (config.js)
+
+```javascript
+// === CONFIGURACIÓN MAESTRA ===
+
+// Validar que las variables estén cargadas
+if (!window.ENV) {
+    console.error('❌ Variables de entorno no cargadas');
+    alert('Error de configuración. Contacta al administrador.');
+}
+
+// Configuración de Supabase
+const SUPABASE_CONFIG = {
+    url: window.ENV?.SUPABASE_URL || 'https://configurar-en-coolify',
+    anonKey: window.ENV?.SUPABASE_ANON_KEY || 'configurar-en-coolify',
+    
+    // Headers para peticiones
+    headers: function() {
+        return {
+            'apikey': this.anonKey,
+            'Authorization': `Bearer ${this.anonKey}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+        };
+    }
+};
+
+// Configuración de Stripe
+const STRIPE_CONFIG = {
+    publicKey: window.ENV?.STRIPE_PUBLIC_KEY || 'pk_test_configurar',
+    currency: 'eur',
+    locale: 'es',
+    
+    // URLs de retorno
+    urls: {
+        success: `${window.location.origin}/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel: `${window.location.origin}/cancel`
+    }
+};
+
+// Configuración del Backend/API
+const API_CONFIG = {
+    baseUrl: window.ENV?.API_URL || window.location.origin,
+    
+    endpoints: {
+        // Stripe
+        createCheckoutSession: '/api/stripe/create-checkout-session',
+        createPaymentIntent: '/api/stripe/create-payment-intent',
+        webhook: '/api/stripe/webhook',
+        
+        // Supabase proxy (opcional)
+        supabaseProxy: '/api/supabase'
+    }
+};
+
+// Configuración de la App
+const APP_CONFIG = {
+    mode: window.ENV?.APP_MODE || 'development',
+    debug: window.ENV?.ENABLE_DEBUG === 'true',
+    
+    // Features flags
+    features: {
+        payments: true,
+        database: true,
+        authentication: false, // Por ahora
+        realtime: false       // Por ahora
+    }
+};
+
+// Validación de configuración
+function validateConfig() {
+    const errors = [];
+    
+    if (!SUPABASE_CONFIG.url || SUPABASE_CONFIG.url.includes('configurar')) {
+        errors.push('Supabase URL no configurada');
+    }
+    
+    if (!STRIPE_CONFIG.publicKey || STRIPE_CONFIG.publicKey.includes('configurar')) {
+        errors.push('Stripe Public Key no configurada');
+    }
+    
+    if (errors.length > 0) {
+        console.error('❌ Errores de configuración:', errors);
+        return false;
+    }
+    
+    console.log('✅ Configuración válida');
+    return true;
+}
+
+// Inicializar en carga
+document.addEventListener('DOMContentLoaded', validateConfig);
+```
+
+## 📊 Funciones Supabase (supabase.js)
+
+```javascript
+// === FUNCIONES SUPABASE ===
+
+// Helper para construir URLs
+function getSupabaseUrl(endpoint) {
+    return `${SUPABASE_CONFIG.url}/rest/v1/${endpoint}`;
+}
+
+// CREATE - Crear registro
+async function supabaseCreate(table, data) {
+    try {
+        const response = await fetch(getSupabaseUrl(table), {
+            method: 'POST',
+            headers: SUPABASE_CONFIG.headers(),
+            body: JSON.stringify(data)
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Error ${response.status}: ${response.statusText}`);
+        }
+        
+        return await response.json();
+    } catch (error) {
+        console.error('Error en supabaseCreate:', error);
+        throw error;
+    }
+}
+
+// READ - Leer registros
+async function supabaseRead(table, filters = '') {
+    try {
+        const response = await fetch(getSupabaseUrl(table) + filters, {
+            method: 'GET',
+            headers: SUPABASE_CONFIG.headers()
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Error ${response.status}: ${response.statusText}`);
+        }
+        
+        return await response.json();
+    } catch (error) {
+        console.error('Error en supabaseRead:', error);
+        throw error;
+    }
+}
+
+// UPDATE - Actualizar registro
+async function supabaseUpdate(table, id, data) {
+    try {
+        const response = await fetch(getSupabaseUrl(`${table}?id=eq.${id}`), {
+            method: 'PATCH',
+            headers: SUPABASE_CONFIG.headers(),
+            body: JSON.stringify(data)
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Error ${response.status}: ${response.statusText}`);
+        }
+        
+        return await response.json();
+    } catch (error) {
+        console.error('Error en supabaseUpdate:', error);
+        throw error;
+    }
+}
+
+// DELETE - Eliminar registro
+async function supabaseDelete(table, id) {
+    try {
+        const response = await fetch(getSupabaseUrl(`${table}?id=eq.${id}`), {
+            method: 'DELETE',
+            headers: SUPABASE_CONFIG.headers()
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Error ${response.status}: ${response.statusText}`);
+        }
+        
+        return response.ok;
+    } catch (error) {
+        console.error('Error en supabaseDelete:', error);
+        throw error;
+    }
+}
+
+// Función específica para guardar orden
+async function guardarOrdenEnSupabase(orderData) {
+    // Estructura de la tabla orders en Supabase:
+    // - id (uuid)
+    // - customer_email (text)
+    // - amount (integer) 
+    // - currency (text)
+    // - items (jsonb)
+    // - stripe_session_id (text)
+    // - status (text)
+    // - created_at (timestamp)
+    
+    return await supabaseCreate('orders', {
+        customer_email: orderData.email,
+        amount: orderData.amount,
+        currency: orderData.currency || 'eur',
+        items: orderData.items,
+        stripe_session_id: orderData.sessionId,
+        status: 'pending'
+    });
+}
+
+// Función para actualizar estado del pago
+async function actualizarEstadoPago(sessionId, status) {
+    const orders = await supabaseRead('orders', `?stripe_session_id=eq.${sessionId}`);
+    
+    if (orders.length > 0) {
+        return await supabaseUpdate('orders', orders[0].id, { status });
+    }
+}
+```
+
+## 💳 Funciones Stripe (stripe.js)
+
+```javascript
+// === FUNCIONES STRIPE ===
+
+let stripe = null;
+
+// Inicializar Stripe
+function initializeStripe() {
+    if (!STRIPE_CONFIG.publicKey) {
+        console.error('❌ Stripe Public Key no configurada');
+        return false;
+    }
+    
+    try {
+        stripe = Stripe(STRIPE_CONFIG.publicKey);
+        console.log('✅ Stripe inicializado');
+        return true;
+    } catch (error) {
+        console.error('❌ Error inicializando Stripe:', error);
+        return false;
+    }
+}
+
+// Crear sesión de checkout (requiere backend)
+async function createCheckoutSession(items) {
+    try {
+        const response = await fetch(API_CONFIG.baseUrl + API_CONFIG.endpoints.createCheckoutSession, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                items: items,
+                success_url: STRIPE_CONFIG.urls.success,
+                cancel_url: STRIPE_CONFIG.urls.cancel
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error('Error al crear sesión de checkout');
+        }
+        
+        const session = await response.json();
+        return session;
+    } catch (error) {
+        console.error('Error en createCheckoutSession:', error);
+        throw error;
+    }
+}
+
+// Redirigir a Stripe Checkout
+async function redirectToCheckout(sessionId) {
+    if (!stripe) {
+        throw new Error('Stripe no está inicializado');
+    }
+    
+    const result = await stripe.redirectToCheckout({
+        sessionId: sessionId
+    });
+    
+    if (result.error) {
+        throw new Error(result.error.message);
+    }
+}
+
+// Proceso completo de pago
+async function procesarPago(carrito) {
+    try {
+        // 1. Validar carrito
+        if (!carrito || carrito.length === 0) {
+            throw new Error('Carrito vacío');
+        }
+        
+        // 2. Preparar items para Stripe
+        const items = carrito.map(item => ({
+            price_data: {
+                currency: STRIPE_CONFIG.currency,
+                product_data: {
+                    name: item.name,
+                    description: item.description || '',
+                    images: item.images || []
+                },
+                unit_amount: item.price // En centavos
+            },
+            quantity: item.quantity
+        }));
+        
+        // 3. Crear sesión (requiere backend)
+        const session = await createCheckoutSession(items);
+        
+        // 4. Guardar orden en Supabase
+        const orderData = {
+            email: session.customer_email || 'pending@example.com',
+            amount: session.amount_total,
+            currency: session.currency,
+            items: carrito,
+            sessionId: session.id
+        };
+        
+        await guardarOrdenEnSupabase(orderData);
+        
+        // 5. Redirigir a Stripe
+        await redirectToCheckout(session.id);
+        
+    } catch (error) {
+        console.error('Error procesando pago:', error);
+        mostrarError('Error al procesar el pago: ' + error.message);
+    }
+}
+
+// Verificar estado del pago (después del retorno)
+async function verificarPago() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const sessionId = urlParams.get('session_id');
+    
+    if (sessionId) {
+        try {
+            // Actualizar en Supabase
+            await actualizarEstadoPago(sessionId, 'completed');
+            
+            // Limpiar carrito
+            localStorage.removeItem('carrito');
+            
+            // Mostrar mensaje de éxito
+            mostrarExito('¡Pago completado exitosamente!');
+            
+            // Redirigir después de 3 segundos
+            setTimeout(() => {
+                window.location.href = '/';
+            }, 3000);
+            
+        } catch (error) {
+            console.error('Error verificando pago:', error);
+        }
+    }
+}
+
+// Inicializar Stripe al cargar
+document.addEventListener('DOMContentLoaded', () => {
+    initializeStripe();
+    verificarPago();
+});
+```
+
+## 🛒 Ejemplo de Aplicación Completa (app.js)
+
+```javascript
+// === APLICACIÓN PRINCIPAL ===
+
+// Estado global
+let carrito = JSON.parse(localStorage.getItem('carrito')) || [];
+let productos = [];
+let usuario = null;
+
+// Inicializar aplicación
+async function initApp() {
+    console.log('🚀 Iniciando aplicación...');
+    
+    // 1. Validar configuración
+    if (!validateConfig()) {
+        mostrarError('Error de configuración');
+        return;
+    }
+    
+    // 2. Cargar productos desde Supabase
+    await cargarProductos();
+    
+    // 3. Inicializar Stripe
+    initializeStripe();
+    
+    // 4. Configurar UI
+    setupUI();
+    
+    // 5. Verificar si viene de un pago
+    verificarPago();
+    
+    console.log('✅ Aplicación lista');
+}
+
+// Cargar productos desde Supabase
+async function cargarProductos() {
+    try {
+        mostrarCargando(true);
+        
+        // Cargar desde Supabase
+        productos = await supabaseRead('products', '?active=eq.true&order=price');
+        
+        // Mostrar en UI
+        mostrarProductos(productos);
+        
+    } catch (error) {
+        console.error('Error cargando productos:', error);
+        mostrarError('Error al cargar productos');
+    } finally {
+        mostrarCargando(false);
+    }
+}
+
+// Mostrar productos en la UI
+function mostrarProductos(productos) {
+    const container = document.getElementById('productos-grid');
+    container.innerHTML = '';
+    
+    productos.forEach(producto => {
+        const card = document.createElement('div');
+        card.className = 'producto-card';
+        card.innerHTML = `
+            <img src="${producto.image_url || '/placeholder.jpg'}" alt="${producto.name}">
+            <h3>${producto.name}</h3>
+            <p>${producto.description}</p>
+            <div class="precio">€${(producto.price / 100).toFixed(2)}</div>
+            <button onclick="agregarAlCarrito('${producto.id}')" class="btn-primary">
+                Agregar al Carrito
+            </button>
+        `;
+        container.appendChild(card);
+    });
+}
+
+// Agregar producto al carrito
+function agregarAlCarrito(productoId) {
+    const producto = productos.find(p => p.id === productoId);
+    if (!producto) return;
+    
+    const itemExistente = carrito.find(item => item.id === productoId);
+    
+    if (itemExistente) {
+        itemExistente.quantity += 1;
+    } else {
+        carrito.push({
+            id: producto.id,
+            name: producto.name,
+            price: producto.price,
+            quantity: 1
+        });
+    }
+    
+    guardarCarrito();
+    actualizarUICarrito();
+    mostrarExito(`${producto.name} agregado al carrito`);
+}
+
+// Guardar carrito en localStorage
+function guardarCarrito() {
+    localStorage.setItem('carrito', JSON.stringify(carrito));
+}
+
+// Actualizar UI del carrito
+function actualizarUICarrito() {
+    const contador = document.getElementById('carrito-contador');
+    const total = document.getElementById('carrito-total');
+    
+    const cantidadTotal = carrito.reduce((sum, item) => sum + item.quantity, 0);
+    const precioTotal = carrito.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    
+    contador.textContent = cantidadTotal;
+    total.textContent = `€${(precioTotal / 100).toFixed(2)}`;
+}
+
+// Procesar checkout
+async function procesarCheckout() {
+    if (carrito.length === 0) {
+        mostrarError('El carrito está vacío');
+        return;
+    }
+    
+    try {
+        mostrarCargando(true);
+        await procesarPago(carrito);
+    } catch (error) {
+        mostrarError('Error al procesar el pago');
+    } finally {
+        mostrarCargando(false);
+    }
+}
+
+// Funciones UI helpers
+function mostrarCargando(mostrar) {
+    document.getElementById('loading').style.display = mostrar ? 'block' : 'none';
+}
+
+function mostrarError(mensaje) {
+    const alert = document.createElement('div');
+    alert.className = 'alert alert-error';
+    alert.textContent = mensaje;
+    document.body.appendChild(alert);
+    
+    setTimeout(() => alert.remove(), 5000);
+}
+
+function mostrarExito(mensaje) {
+    const alert = document.createElement('div');
+    alert.className = 'alert alert-success';
+    alert.textContent = mensaje;
+    document.body.appendChild(alert);
+    
+    setTimeout(() => alert.remove(), 5000);
+}
+
+// Setup UI
+function setupUI() {
+    // Botón de checkout
+    document.getElementById('btn-checkout')?.addEventListener('click', procesarCheckout);
+    
+    // Actualizar carrito
+    actualizarUICarrito();
+}
+
+// Iniciar cuando el DOM esté listo
+document.addEventListener('DOMContentLoaded', initApp);
+```
+
+## 📊 Estructura de Base de Datos Supabase
+
+```sql
+-- Tabla de productos
+CREATE TABLE products (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    price INTEGER NOT NULL, -- En centavos
+    image_url TEXT,
+    active BOOLEAN DEFAULT true,
+    stock INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Tabla de órdenes
+CREATE TABLE orders (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    customer_email TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    currency TEXT DEFAULT 'eur',
+    items JSONB NOT NULL,
+    stripe_session_id TEXT UNIQUE,
+    stripe_payment_intent TEXT,
+    status TEXT DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Tabla de clientes (opcional)
+CREATE TABLE customers (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    name TEXT,
+    stripe_customer_id TEXT UNIQUE,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Índices para mejor performance
+CREATE INDEX idx_orders_session_id ON orders(stripe_session_id);
+CREATE INDEX idx_orders_status ON orders(status);
+CREATE INDEX idx_customers_email ON customers(email);
+
+-- RLS (Row Level Security)
+ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
+
+-- Políticas básicas
+CREATE POLICY "Products son públicos" ON products
+    FOR SELECT USING (true);
+
+CREATE POLICY "Orders solo lectura propia" ON orders
+    FOR SELECT USING (auth.email() = customer_email);
+```
+
+## 🔧 Variables de Entorno en Coolify
+
+```env
+# === SUPABASE ===
+SUPABASE_URL=https://tu-proyecto.supabase.co
+SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# === STRIPE ===
+STRIPE_PUBLIC_KEY=pk_test_51ABC...
+STRIPE_SECRET_KEY=sk_test_51ABC... # Solo para backend
+STRIPE_WEBHOOK_SECRET=whsec_... # Para webhooks
+
+# === APLICACIÓN ===
+API_URL=https://tu-backend.com
+APP_MODE=production
+ENABLE_DEBUG=false
+
+# === OPCIONAL ===
+SENTRY_DSN=https://... # Para monitoreo de errores
+ANALYTICS_ID=G-... # Google Analytics
+```
+
+## 🚀 Backend Mínimo con Node.js (backend/server.js)
+
+```javascript
+const express = require('express');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const cors = require('cors');
+
+const app = express();
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Endpoint para crear sesión de checkout
+app.post('/api/stripe/create-checkout-session', async (req, res) => {
+    try {
+        const { items } = req.body;
+        
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            line_items: items,
+            mode: 'payment',
+            success_url: req.body.success_url,
+            cancel_url: req.body.cancel_url,
+            metadata: {
+                // Agregar metadata útil
+                order_id: generateOrderId()
+            }
+        });
+        
+        res.json({ id: session.id });
+    } catch (error) {
+        console.error('Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Webhook de Stripe
+app.post('/api/stripe/webhook', express.raw({type: 'application/json'}), async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    let event;
+    
+    try {
+        event = stripe.webhooks.constructEvent(
+            req.body,
+            sig,
+            process.env.STRIPE_WEBHOOK_SECRET
+        );
+    } catch (err) {
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+    
+    // Manejar eventos
+    switch (event.type) {
+        case 'checkout.session.completed':
+            const session = event.data.object;
+            // Actualizar orden en Supabase
+            await actualizarOrdenCompletada(session);
+            break;
+            
+        case 'payment_intent.payment_failed':
+            // Manejar pago fallido
+            break;
+    }
+    
+    res.json({received: true});
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Backend corriendo en puerto ${PORT}`);
+});
+```
+
+## 🐛 Debugging y Monitoreo
+
+```javascript
+// === SISTEMA DE DEBUG ===
+
+const Debug = {
+    enabled: APP_CONFIG.debug,
+    
+    log: function(...args) {
+        if (this.enabled) {
+            console.log('[DEBUG]', ...args);
+        }
+    },
+    
+    error: function(...args) {
+        console.error('[ERROR]', ...args);
+        
+        // Enviar a servicio de monitoreo si está configurado
+        if (window.Sentry) {
+            Sentry.captureException(args[0]);
+        }
+    },
+    
+    table: function(data) {
+        if (this.enabled) {
+            console.table(data);
+        }
+    },
+    
+    // Panel de debug en UI
+    showPanel: function() {
+        if (!this.enabled) return;
+        
+        const panel = document.createElement('div');
+        panel.id = 'debug-panel';
+        panel.innerHTML = `
+            <h3>🔧 Debug Panel</h3>
+            <p>Supabase: ${SUPABASE_CONFIG.url}</p>
+            <p>Stripe: ${stripe ? '✅ Inicializado' : '❌ No inicializado'}</p>
+            <p>Carrito: ${carrito.length} items</p>
+            <p>Modo: ${APP_CONFIG.mode}</p>
+            <button onclick="Debug.clearData()">Limpiar Datos</button>
+            <button onclick="Debug.testPayment()">Test Pago</button>
+        `;
+        document.body.appendChild(panel);
+    },
+    
+    clearData: function() {
+        localStorage.clear();
+        location.reload();
+    },
+    
+    testPayment: function() {
+        // Agregar producto de prueba
+        carrito = [{
+            id: 'test-001',
+            name: 'Producto de Prueba',
+            price: 100, // €1.00
+            quantity: 1
+        }];
+        guardarCarrito();
+        procesarCheckout();
+    }
+};
+```
+
+## 🔒 Seguridad y Mejores Prácticas
+
+### 1. **RLS en Supabase**
+```sql
+-- Productos públicos, órdenes privadas
+CREATE POLICY "public_products" ON products FOR SELECT USING (true);
+CREATE POLICY "own_orders" ON orders FOR SELECT USING (auth.email() = customer_email);
+```
+
+### 2. **Validación de Datos**
+```javascript
+// Siempre validar en frontend Y backend
+function validarEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function validarPrecio(precio) {
+    return typeof precio === 'number' && precio >= 50; // Mínimo €0.50
+}
+```
+
+### 3. **Sanitización**
+```javascript
+function sanitizeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+```
+
+### 4. **HTTPS Siempre**
+- Coolify maneja SSL automáticamente
+- Nunca envíes datos sensibles por HTTP
+
+## 📈 Flujo Completo de una Compra
+
+```
+1. Usuario navega productos (Supabase)
+   ↓
+2. Agrega al carrito (localStorage)
+   ↓
+3. Click en "Pagar"
+   ↓
+4. Frontend envía carrito al backend
+   ↓
+5. Backend crea sesión con Stripe
+   ↓
+6. Frontend guarda orden en Supabase (pending)
+   ↓
+7. Redirige a Stripe Checkout
+   ↓
+8. Usuario completa pago
+   ↓
+9. Stripe envía webhook al backend
+   ↓
+10. Backend actualiza orden en Supabase (completed)
+    ↓
+11. Usuario regresa a success page
+    ↓
+12. Frontend verifica y muestra confirmación
+```
+
+## 🚀 Checklist de Deployment
+
+- [ ] Dockerfile con puerto 8080
+- [ ] entrypoint.sh ejecutable
+- [ ] Variables en Coolify configuradas
+- [ ] Supabase: tablas creadas y RLS activo
+- [ ] Stripe: claves configuradas y webhooks
+- [ ] Backend desplegado (si lo usas)
+- [ ] Dominio configurado con SSL
+- [ ] Testing en modo prueba
+- [ ] Logs y monitoreo activos
+
+## 💡 Tips Pro
+
+1. **Usa Stripe CLI** para testing local:
+   ```bash
+   stripe listen --forward-to localhost:3000/api/stripe/webhook
+   ```
+
+2. **Supabase Realtime** para actualizaciones:
+   ```javascript
+   // Suscribirse a cambios de órdenes
+   const subscription = supabase
+     .from('orders')
+     .on('UPDATE', payload => {
+       console.log('Orden actualizada:', payload);
+     })
+     .subscribe();
+   ```
+
+3. **Cache de productos**:
+   ```javascript
+   // Cachear productos por 5 minutos
+   const CACHE_KEY = 'products_cache';
+   const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+   
+   async function getProductosCached() {
+     const cached = localStorage.getItem(CACHE_KEY);
+     if (cached) {
+       const { data, timestamp } = JSON.parse(cached);
+       if (Date.now() - timestamp < CACHE_TTL) {
+         return data;
+       }
+     }
+     
+     const productos = await supabaseRead('products');
+     localStorage.setItem(CACHE_KEY, JSON.stringify({
+       data: productos,
+       timestamp: Date.now()
+     }));
+     
+     return productos;
+   }
+   ```
+
+## 📚 Recursos Esenciales
+
+- **Stripe Testing**: https://stripe.com/docs/testing
+- **Supabase JS Client**: https://supabase.com/docs/reference/javascript
+- **Coolify Docs**: https://coolify.io/docs
+- **Ejemplos de código**: https://github.com/stripe/stripe-samples
+
+---
+
+**Stack completo**: Stripe + Supabase + Coolify + VPS
+**Creado para**: Tu entorno específico
+**Mantenido por**: Tu conocimiento acumulado
+**Última actualización**: Enero 2025
