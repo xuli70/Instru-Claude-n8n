@@ -1,0 +1,184 @@
+# Guía detallada para Claude
+
+> **Objetivo**: Permitir a Claude (Anthropic) generar y mantener aplicaciones web modernas que se despliegan automáticamente desde GitHub a un VPS mediante **Coolify**, con **Supabase** como backend.
+>
+> Sigue **cada paso** en el orden presentado. No omitas ni modifiques variables, puertos o rutas salvo que se indique lo contrario.
+
+---
+
+## 1 · Contexto y alcance
+
+| Componente   | Rol                                   | Observaciones                                                    |
+| ------------ | ------------------------------------- | ---------------------------------------------------------------- |
+| **GitHub**   | Origen del código                     | Cada push a la rama `main` dispara un rebuild en Coolify.        |
+| **Coolify**  | PaaS auto‑hosteado en el VPS          | Expone la app en el puerto **8080** dentro del contenedor.       |
+| **Supabase** | Backend (PostgreSQL + Auth + Storage) | Gestiona datos y auth; usa API-key de tipo **ANON** en frontend. |
+
+---
+
+## 2 · Requisitos previos
+
+1. Repositorio GitHub vacío o existente.
+2. Proyecto Supabase listo y acceso al dashboard.
+3. VPS con Coolify ≥ v4 instalado y dominio apuntado (ej.: `app.midominio.com`).
+4. Claves:
+   - `SUPABASE_URL`
+   - `SUPABASE_ANON_KEY`
+
+---
+
+## 3 · Flujo general
+
+```
+git push → GitHub → Coolify build (Dockerfile) → Contenedor ←→ Supabase
+                                          ↓            ↑
+                                env vars (panel)     Caddy (8080)
+```
+
+---
+
+## 4 · Pasos exhaustivos
+
+### 4.1 Crear estructura del repositorio
+
+```bash
+mkdir mi-app && cd mi-app
+npm create vite@latest . # o tu herramienta preferida
+```
+
+Añade un `` **sin valores reales**:
+
+```
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+```
+
+### 4.2 Añadir Dockerfile compatible con Coolify
+
+```dockerfile
+# Dockerfile
+FROM node:18-alpine
+WORKDIR /app
+RUN apk add --no-cache caddy
+COPY . .
+# Genera Caddyfile eminentemente estático
+RUN echo ":${PORT:-8080} {\n  root * /app\n  file_server\n  try_files {path} /index.html\n}" > /app/Caddyfile
+EXPOSE 8080
+CMD ["/app/entrypoint.sh"]
+```
+
+### 4.3 Crear script de arranque
+
+```bash
+# entrypoint.sh
+#!/bin/sh
+cat > /app/env.js <<EOF
+window.ENV = {
+  SUPABASE_URL: "${SUPABASE_URL}",
+  SUPABASE_ANON_KEY: "${SUPABASE_ANON_KEY}"
+};
+EOF
+exec caddy run --config /app/Caddyfile --adapter caddyfile
+```
+
+> **Regla**: No escribas `SERVICE_ROLE_KEY` ni otras claves sensibles en el frontend.
+
+Hazlo ejecutable:
+
+```bash
+chmod +x entrypoint.sh
+```
+
+### 4.4 Commit inicial
+
+```bash
+git add Dockerfile entrypoint.sh .env.example
+git commit -m "Infraestructura Coolify"
+git push origin main
+```
+
+### 4.5 Configurar la aplicación en Coolify
+
+1. **New → Application → Dockerfile**.
+2. Conecta tu repositorio (`org/mi-app`).
+3. Acepta la rama `main` y el puerto **8080** (Coolify lo detecta).
+4. Pestaña **Environment Variables** → añade:
+   ```
+   SUPABASE_URL=https://xyz.supabase.co
+   SUPABASE_ANON_KEY=eyJhbGciOiJI...
+   ```
+5. *Save & Deploy*.
+
+### 4.6 Habilitar RLS en Supabase (modo seguro)
+
+```sql
+ALTER TABLE public.tareas ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "lectura_publica" ON public.tareas
+  FOR SELECT USING (true);
+```
+
+> Empieza con políticas permisivas y endurece gradualmente.
+
+### 4.7 Auto‑redeploy en cada push
+
+En **Coolify → Git integration** activa *Automatic redeploy on push*.
+
+---
+
+## 5 · Pruebas y validación
+
+1. **Health‑check**
+   ```bash
+   curl -I https://app.midominio.com | grep "200 OK"
+   ```
+2. **Variables inyectadas**: abre consola del navegador y ejecuta `window.ENV`.
+3. **RLS**: conecta vía SQL → `SET ROLE anon; SELECT * FROM public.tareas;`  Solo deben aparecer filas permitidas.
+4. **Pipeline**: realiza `git commit --allow-empty -m "trigger"` → `git push` y observa que Coolify reconstruye sin errores.
+
+---
+
+## 6 · Buenas prácticas obligatorias
+
+| Aspecto        | Instrucción                                                                            |
+| -------------- | -------------------------------------------------------------------------------------- |
+| Seguridad      | No exponer `SERVICE_ROLE_KEY`.Rotar claves periódicamente desde Supabase.              |
+| Mantenibilidad | Mantén `.env.example` actualizado.Documenta cambios de puerto, rutas y dependencias.   |
+| Escalabilidad  | Contenedores son sin estado; escala réplicas desde Coolify sin modificación de código. |
+| Rendimiento    | Caddy para servir estáticos; considera CDN si crece la latencia.                       |
+
+---
+
+## 7 · Checklist final antes de producción
+
+-
+
+---
+
+## 8 · Ejemplo de código de consumo (cliente)
+
+```js
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  window.ENV.SUPABASE_URL,
+  window.ENV.SUPABASE_ANON_KEY
+);
+
+export const getTasks = async () => {
+  const { data, error } = await supabase.from("tareas").select("*");
+  if (error) throw error;
+  return data;
+};
+```
+
+---
+
+### Instrucción final para Claude
+
+> **Claude, asegúrate de seguir estrictamente esta guía.** Cada vez que crees una nueva aplicación web:
+>
+> 1. Inicializa el repo con el Dockerfile y el script indicados.
+> 2. Configura variables y RLS como se describe.
+> 3. Verifica el checklist final antes de marcar el despliegue como exitoso.
+
+**Cualquier desviación debe ser reportada y corregida antes de continuar.**
